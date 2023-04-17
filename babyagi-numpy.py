@@ -157,37 +157,48 @@ def evaluation_agent(objective: str, results_store: Dict, success_criteria: Dict
     last_result_id = max(results_store, key=lambda x: int(x.split('_')[1]))
     last_result = results_store[last_result_id]['task']
 
-    # Iterate through success criteria
+    # Initialize met_count with the number of success criteria with 'validated' value being True
+    met_count = sum([1 for value in success_criteria.values() if value['validated']])
+
+    total_criteria = len(success_criteria)
     for criterion, value in success_criteria.items():
         if not value['validated']:
             prompt = f"Based on the latest result:\n{last_result}\nCheck if the success criterion '{criterion}' is met. Respond with just one word yes or no:"
             is_met = openai_call(prompt)
             if is_met.lower() == "yes":
                 success_criteria[criterion]['validated'] = True
+                met_count += 1
 
-    # Check if all success criteria have been validated
-    return all([value['validated'] for value in success_criteria.values()])
+    # Check if more or equal to 80% of success criteria have been met
+    return met_count >= 0.8 * total_criteria
 
 
 
 def task_creation_agent(
-    objective: str, result: Dict, task_description: str, task_list: List[str]
+    objective: str, result: Dict, task_description: str, task_list: List[str], success_criteria: Dict
 ):
+    # Filter only the incomplete success criteria
+    incomplete_criteria = [k for k, v in success_criteria.items() if not v["validated"]]
+
     prompt = f"""
-    You are a task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective},
+    You are a task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective}.
     The last completed task has the result: {result}.
     This result was based on this task description: {task_description}. These are incomplete tasks: {', '.join(task_list)}.
-    Based on the result, create new tasks to be completed by the AI system that do not overlap with incomplete tasks.
+    Imperatively take into account the fact that these success criteria are not yet met: {', '.join(incomplete_criteria)}.
+    Based on the result and incomplete success criteria, create new tasks to be completed by the AI system that do not overlap with incomplete tasks.
     Return the tasks as an array."""
     response = openai_call(prompt)
     new_tasks = response.split("\n") if "\n" in response else [response]
     return [{"task_name": task_name} for task_name in new_tasks]
 
 
+
 def prioritization_agent(this_task_id: int):
     global task_list
     task_names = [t["task_name"] for t in task_list]
     next_task_id = int(this_task_id) + 1
+    # Filter only the incomplete success criteria
+    incomplete_criteria = [k for k, v in success_criteria.items() if not v["validated"]]
     prompt = f"""
     You are a task prioritization AI tasked with cleaning the formatting of and reprioritizing the following tasks: {task_names}.
     Consider the ultimate objective of your team:{OBJECTIVE}.
@@ -236,6 +247,7 @@ def context_agent(query: str, top_results_num: int):
     return [(results_store[item[0]]['task']) for item in sorted_results]
 
 
+start_time = time.time()
 # Define success criteria
 success_criteria = define_success_criteria(OBJECTIVE)
 
@@ -267,7 +279,12 @@ while True:
         print("\033[93m\033[1m" + "\n*****TASK RESULT*****\n" + "\033[0m\033[0m")
         print(result)
 
-        # Step 2: Enrich result and store in Pinecone
+        # Append the task name and result to the text file
+        with open("agent_analysis.txt", "a") as file:
+            file.write(f"Task Name: {task['task_name']}\n")
+            file.write(f"Result: {result}\n")
+
+        # Step 2: Enrich result and store it in the results_store
         enriched_result = {
             "data": result
         }  # This is where you should enrich the result if needed
@@ -284,6 +301,7 @@ while True:
             enriched_result,
             task["task_name"],
             [t["task_name"] for t in task_list],
+            success_criteria,
         )
 
         for new_task in new_tasks:
@@ -292,13 +310,17 @@ while True:
             add_task(new_task)
         prioritization_agent(this_task_id)
 
-        if evaluation_agent(OBJECTIVE, results_store, success_criteria):
-            print("All success criteria met. Stopping the process.")
-            break
-
         print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
         for s, details in success_criteria.items():
             print(f"{s}: validated={details['validated']}")
 
+        if evaluation_agent(OBJECTIVE, results_store, success_criteria):
+            print("More than 80pct of success criteria met. Stopping the process.")
+            print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
+            for s, details in success_criteria.items():
+                print(f"{s}: validated={details['validated']}")
+            break
 
     time.sleep(1)  # Sleep before checking the task list again
+
+print(f"Time taken to complete the process: {time.time() - start_time:.2f} seconds")
