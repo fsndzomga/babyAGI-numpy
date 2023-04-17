@@ -139,6 +139,36 @@ def openai_call(
         else:
             break
 
+def define_success_criteria(objective: str) -> Dict[str, Dict[str, bool]]:
+    prompt = f"Based on the objective '{objective}', define success criteria as a list:"
+    success_criteria = openai_call(prompt)
+    criteria_list = success_criteria.split("\n") if "\n" in success_criteria else [success_criteria]
+
+    # Create a dictionary with success criteria and their validation statuses
+    criteria_dict = {}
+    for criterion in criteria_list:
+        criteria_dict[criterion] = {'validated': False}
+
+    return criteria_dict
+
+
+def evaluation_agent(objective: str, results_store: Dict, success_criteria: Dict):
+    # Get the latest result
+    last_result_id = max(results_store, key=lambda x: int(x.split('_')[1]))
+    last_result = results_store[last_result_id]['task']
+
+    # Iterate through success criteria
+    for criterion, value in success_criteria.items():
+        if not value['validated']:
+            prompt = f"Based on the latest result:\n{last_result}\nCheck if the success criterion '{criterion}' is met. Respond with just one word yes or no:"
+            is_met = openai_call(prompt)
+            if is_met.lower() == "yes":
+                success_criteria[criterion]['validated'] = True
+
+    # Check if all success criteria have been validated
+    return all([value['validated'] for value in success_criteria.values()])
+
+
 
 def task_creation_agent(
     objective: str, result: Dict, task_description: str, task_list: List[str]
@@ -206,6 +236,12 @@ def context_agent(query: str, top_results_num: int):
     return [(results_store[item[0]]['task']) for item in sorted_results]
 
 
+# Define success criteria
+success_criteria = define_success_criteria(OBJECTIVE)
+
+print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
+for s, details in success_criteria.items():
+    print(f"{s}: validated={details['validated']}")
 
 # Add the first task
 first_task = {"task_id": 1, "task_name": INITIAL_TASK}
@@ -255,5 +291,14 @@ while True:
             new_task.update({"task_id": task_id_counter})
             add_task(new_task)
         prioritization_agent(this_task_id)
+
+        if evaluation_agent(OBJECTIVE, results_store, success_criteria):
+            print("All success criteria met. Stopping the process.")
+            break
+
+        print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
+        for s, details in success_criteria.items():
+            print(f"{s}: validated={details['validated']}")
+
 
     time.sleep(1)  # Sleep before checking the task list again
