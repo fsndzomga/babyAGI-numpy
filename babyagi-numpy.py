@@ -82,6 +82,12 @@ results_store = {}
 # Task list
 task_list = deque([])
 
+def is_text_generation_possible(objective: str) -> bool:
+    prompt = f"Can the objective '{objective}' be solved by generating text? (yes or no):"
+    response = openai_call(prompt)
+    return response.lower() == "yes"
+
+
 
 def add_task(task: Dict):
     task_list.append(task)
@@ -144,10 +150,10 @@ def define_success_criteria(objective: str) -> Dict[str, Dict[str, bool]]:
     success_criteria = openai_call(prompt)
     criteria_list = success_criteria.split("\n") if "\n" in success_criteria else [success_criteria]
 
-    # Create a dictionary with success criteria and their validation statuses
+    # Create a dictionary with success criteria, their validation statuses, and feedback
     criteria_dict = {}
     for criterion in criteria_list:
-        criteria_dict[criterion] = {'validated': False}
+        criteria_dict[criterion] = {'validated': False, 'feedback': ''}
 
     return criteria_dict
 
@@ -168,9 +174,14 @@ def evaluation_agent(objective: str, results_store: Dict, success_criteria: Dict
             if is_met.lower() == "yes":
                 success_criteria[criterion]['validated'] = True
                 met_count += 1
+            else:
+                feedback_prompt = f"Explain why the success criterion '{criterion}' is not met in 100 tokens or less:"
+                feedback = openai_call(feedback_prompt)[:100]
+                value['feedback'] = feedback
 
     # Check if more or equal to 80% of success criteria have been met
     return met_count >= 0.8 * total_criteria
+
 
 
 
@@ -178,13 +189,13 @@ def task_creation_agent(
     objective: str, result: Dict, task_description: str, task_list: List[str], success_criteria: Dict
 ):
     # Filter only the incomplete success criteria
-    incomplete_criteria = [k for k, v in success_criteria.items() if not v["validated"]]
+    feedbacks = ", ".join([f"{criterion}: {value['feedback']}" for criterion, value in success_criteria.items() if 'feedback' in value])
 
     prompt = f"""
     You are a task creation AI that uses the result of an execution agent to create new tasks with the following objective: {objective}.
     The last completed task has the result: {result}.
     This result was based on this task description: {task_description}. These are incomplete tasks: {', '.join(task_list)}.
-    Imperatively take into account the fact that these success criteria are not yet met: {', '.join(incomplete_criteria)}.
+    Imperatively take into account the success criteria not met and their feedback are: {feedbacks}.
     Based on the result and incomplete success criteria, create new tasks to be completed by the AI system that do not overlap with incomplete tasks.
     Return the tasks as an array."""
     response = openai_call(prompt)
@@ -316,11 +327,14 @@ while True:
 
         if evaluation_agent(OBJECTIVE, results_store, success_criteria):
             print("More than 80pct of success criteria met. Stopping the process.")
-            print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
-            for s, details in success_criteria.items():
-                print(f"{s}: validated={details['validated']}")
             break
 
     time.sleep(1)  # Sleep before checking the task list again
 
 print(f"Time taken to complete the process: {time.time() - start_time:.2f} seconds")
+
+print("================================")
+
+print("\033[95m\033[1m" + "\n*****SUCCESS CRITERIA*****\n" + "\033[0m\033[0m")
+for s, details in success_criteria.items():
+    print(f"{s}: validated={details['validated']}")
