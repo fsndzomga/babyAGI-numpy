@@ -82,11 +82,6 @@ results_store = {}
 # Task list
 task_list = deque([])
 
-def is_text_generation_possible(objective: str) -> bool:
-    prompt = f"Can the objective '{objective}' be solved by generating text? (yes or no):"
-    response = openai_call(prompt)
-    return response.lower() == "yes"
-
 
 
 def add_task(task: Dict):
